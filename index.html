@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ぷよぷよ風ゲーム</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&display=swap");
+      body {
+        font-family: "Mochiy Pop One", sans-serif;
+        touch-action: none; /* ダブルタップによるズームを無効化 */
+      }
+      /* ゲームキャンバスのピクセルをくっきり表示 */
+      canvas {
+        image-rendering: -moz-crisp-edges;
+        image-rendering: -webkit-crisp-edges;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+    </style>
+  </head>
+  <body
+    class="bg-blue-100 flex flex-col items-center justify-center min-h-screen p-4"
+  >
+    <div
+      class="w-full max-w-lg mx-auto bg-white rounded-2xl shadow-xl p-4 sm:p-6"
+    >
+      <h1 class="text-3xl sm:text-4xl font-bold text-center text-blue-600 mb-4">
+        ぷよぷよ風ゲーム
+      </h1>
+
+      <div
+        class="flex flex-col sm:flex-row justify-around items-center gap-4 mb-4"
+      >
+        <div class="text-center">
+          <h2 class="text-lg text-gray-600">スコア</h2>
+          <p id="score" class="text-3xl font-bold text-yellow-500">0</p>
+        </div>
+        <div class="text-center">
+          <h2 class="text-lg text-gray-600">れんさ</h2>
+          <p id="chain" class="text-3xl font-bold text-pink-500">0</p>
+        </div>
+        <div class="text-center">
+          <h2 class="text-lg text-gray-600">つぎのぷよ</h2>
+          <canvas
+            id="next-puyo-canvas"
+            width="80"
+            height="120"
+            class="bg-gray-100 rounded-lg border-2 border-gray-300"
+          ></canvas>
+        </div>
+      </div>
+
+      <!-- ゲーム画面 -->
+      <div class="relative w-full aspect-[6/13] max-w-xs mx-auto mb-4">
+        <canvas
+          id="game-canvas"
+          class="bg-gray-800 rounded-lg border-4 border-gray-500 w-full h-full"
+        ></canvas>
+        <div
+          id="game-over"
+          class="absolute inset-0 bg-black bg-opacity-70 flex-col justify-center items-center text-white text-4xl font-bold hidden"
+        >
+          <p>ゲームオーバー</p>
+          <p class="text-lg mt-2">下のボタンでリスタート</p>
+        </div>
+      </div>
+
+      <!-- 操作ボタン -->
+      <div class="grid grid-cols-3 gap-2 items-center mb-4 max-w-xs mx-auto">
+        <button
+          id="left-btn"
+          class="bg-blue-500 text-white font-bold py-4 rounded-lg shadow-md active:bg-blue-700 text-2xl"
+        >
+          ←
+        </button>
+        <button
+          id="down-btn"
+          class="bg-blue-500 text-white font-bold py-4 rounded-lg shadow-md active:bg-blue-700 text-2xl"
+        >
+          ↓
+        </button>
+        <button
+          id="right-btn"
+          class="bg-blue-500 text-white font-bold py-4 rounded-lg shadow-md active:bg-blue-700 text-2xl"
+        >
+          →
+        </button>
+        <button
+          id="rotate-left-btn"
+          class="bg-green-500 text-white font-bold py-4 rounded-lg shadow-md active:bg-green-700 col-span-1 text-2xl"
+        >
+          ↺
+        </button>
+        <button
+          id="rotate-right-btn"
+          class="bg-green-500 text-white font-bold py-4 rounded-lg shadow-md active:bg-green-700 col-span-2 text-2xl"
+        >
+          ↻
+        </button>
+      </div>
+
+      <button
+        id="start-button"
+        class="w-full max-w-xs mx-auto bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg text-2xl transition duration-200"
+      >
+        ゲームスタート
+      </button>
+    </div>
+
+    <script>
+      // DOM要素の取得
+      const canvas = document.getElementById("game-canvas");
+      const nextCanvas = document.getElementById("next-puyo-canvas");
+      const scoreEl = document.getElementById("score");
+      const chainEl = document.getElementById("chain");
+      const startButton = document.getElementById("start-button");
+      const gameOverEl = document.getElementById("game-over");
+
+      const ctx = canvas.getContext("2d");
+      const nextCtx = nextCanvas.getContext("2d");
+
+      // ゲーム設定
+      const COLS = 6;
+      const ROWS = 13;
+      const BLOCK_SIZE = 32; // ブロックのサイズ
+      const HIDDEN_ROWS = 1; // 画面上部に見えない行
+
+      canvas.width = COLS * BLOCK_SIZE;
+      canvas.height = (ROWS - HIDDEN_ROWS) * BLOCK_SIZE;
+      nextCanvas.width = 4 * BLOCK_SIZE;
+      nextCanvas.height = 4 * BLOCK_SIZE;
+
+      ctx.scale(BLOCK_SIZE, BLOCK_SIZE);
+      nextCtx.scale(BLOCK_SIZE, BLOCK_SIZE);
+
+      const PUYO_COLORS = {
+        1: "#ef4444", // 赤
+        2: "#22c55e", // 緑
+        3: "#3b82f6", // 青
+        4: "#eab308", // 黄
+        5: "#a855f7", // 紫
+      };
+      const NUM_PUYO_TYPES = Object.keys(PUYO_COLORS).length;
+
+      // ゲームの状態
+      let grid;
+      let currentPuyo;
+      let nextPuyo;
+      let score;
+      let chainCount;
+      let isGameOver;
+      let fallInterval;
+      let fallSpeed;
+      let isCheckingChain = false; // 連鎖チェック中フラグ
+
+      // ぷよクラス
+      class Puyo {
+        constructor(ctx) {
+          this.ctx = ctx;
+          this.reset();
+        }
+
+        // 新しいぷよを生成
+        spawn() {
+          this.axis = { x: 2, y: 0 };
+          this.center = { x: 3, y: 0 };
+          this.color = this.randomizeColor();
+          this.subColor = this.randomizeColor();
+          this.rotation = 0; // 0:上, 1:右, 2:下, 3:左
+        }
+
+        // ぷよをリセット
+        reset() {
+          this.axis = { x: 0, y: 0 };
+          this.center = { x: 0, y: 0 };
+          this.color = 0;
+          this.subColor = 0;
+        }
+
+        // ぷよの色をランダムに決定
+        randomizeColor() {
+          return Math.floor(Math.random() * NUM_PUYO_TYPES) + 1;
+        }
+
+        // ぷよを描画
+        draw() {
+          // 中心ぷよ
+          this.ctx.fillStyle = PUYO_COLORS[this.color];
+          this.drawPuyo(this.center.x, this.center.y - HIDDEN_ROWS);
+
+          // 軸ぷよ
+          this.ctx.fillStyle = PUYO_COLORS[this.subColor];
+          this.drawPuyo(this.axis.x, this.axis.y - HIDDEN_ROWS);
+        }
+
+        // 1つのぷよを描画するヘルパー関数
+        drawPuyo(x, y) {
+          if (y < 0) return; // 画面外は描画しない
+          this.ctx.beginPath();
+          this.ctx.arc(x + 0.5, y + 0.5, 0.45, 0, 2 * Math.PI);
+          this.ctx.fill();
+          // 目玉を描画
+          this.ctx.fillStyle = "white";
+          this.ctx.beginPath();
+          this.ctx.arc(x + 0.6, y + 0.4, 0.15, 0, 2 * Math.PI);
+          this.ctx.fill();
+          this.ctx.fillStyle = "black";
+          this.ctx.beginPath();
+          this.ctx.arc(x + 0.65, y + 0.45, 0.07, 0, 2 * Math.PI);
+          this.ctx.fill();
+        }
+
+        // ぷよを移動
+        move(dx, dy) {
+          this.center.x += dx;
+          this.center.y += dy;
+          this.axis.x += dx;
+          this.axis.y += dy;
+        }
+
+        // ぷよを回転
+        rotate(direction) {
+          const prevRotation = this.rotation;
+          this.rotation = (this.rotation + direction + 4) % 4;
+
+          const dx = this.axis.x - this.center.x;
+          const dy = this.axis.y - this.center.y;
+
+          this.axis.x = this.center.x + direction * dy;
+          this.axis.y = this.center.y - direction * dx;
+
+          // 壁や他のぷよにぶつかった場合の補正
+          if (
+            !isValidMove(this.axis.x, this.axis.y) ||
+            !isValidMove(this.center.x, this.center.y)
+          ) {
+            // 横にずらして試す
+            const originalX = this.center.x;
+            this.move(this.axis.x < 0 ? 1 : this.axis.x >= COLS ? -1 : 0, 0);
+            if (
+              !isValidMove(this.axis.x, this.axis.y) ||
+              !isValidMove(this.center.x, this.center.y)
+            ) {
+              // 戻す
+              this.move(originalX - this.center.x, 0);
+              this.rotate(-direction); // 回転も戻す
+            }
+          }
+        }
+      }
+
+      // ゲームの初期化
+      function init() {
+        grid = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+        score = 0;
+        chainCount = 0;
+        isGameOver = false;
+        fallSpeed = 800;
+        updateScoreDisplay();
+
+        currentPuyo = new Puyo(ctx);
+        currentPuyo.spawn();
+
+        nextPuyo = new Puyo(nextCtx);
+        nextPuyo.spawn();
+        drawNextPuyo();
+
+        gameOverEl.style.display = "none";
+        startButton.textContent = "リスタート";
+
+        if (fallInterval) clearInterval(fallInterval);
+        fallInterval = setInterval(gameLoop, fallSpeed);
+      }
+
+      // ゲームループ
+      function gameLoop() {
+        if (isGameOver || isCheckingChain) return;
+
+        // ぷよを1段下に落とす
+        if (canMove(0, 1)) {
+          currentPuyo.move(0, 1);
+        } else {
+          // 設置
+          lockPuyo();
+          // 新しいぷよを生成
+          currentPuyo.spawn();
+          currentPuyo.color = nextPuyo.color;
+          currentPuyo.subColor = nextPuyo.subColor;
+          nextPuyo.spawn();
+          drawNextPuyo();
+
+          // ゲームオーバーチェック
+          if (!canMove(0, 0)) {
+            gameOver();
+            return;
+          }
+
+          // 連鎖処理を開始
+          isCheckingChain = true;
+          chainCount = 0;
+          checkAllChains();
+        }
+        draw();
+      }
+
+      // 連鎖処理のメイン関数
+      async function checkAllChains() {
+        let foundMatch = false;
+        do {
+          await sleep(300); // ぷよが消える演出のための待機
+          const clearedPuyos = findAndClearMatches();
+
+          if (clearedPuyos > 0) {
+            foundMatch = true;
+            chainCount++;
+            calculateScore(clearedPuyos, chainCount);
+            updateScoreDisplay();
+            draw();
+
+            await sleep(300); // ぷよが落ちる演出のための待機
+            applyGravity();
+            draw();
+          } else {
+            foundMatch = false;
+          }
+        } while (foundMatch);
+
+        isCheckingChain = false; // 連鎖処理終了
+      }
+
+      // ぷよをグリッドに固定
+      function lockPuyo() {
+        grid[currentPuyo.center.y][currentPuyo.center.x] = currentPuyo.color;
+        grid[currentPuyo.axis.y][currentPuyo.axis.x] = currentPuyo.subColor;
+      }
+
+      // ぷよが指定方向に移動可能かチェック
+      function canMove(dx, dy) {
+        const nextCenterX = currentPuyo.center.x + dx;
+        const nextCenterY = currentPuyo.center.y + dy;
+        const nextAxisX = currentPuyo.axis.x + dx;
+        const nextAxisY = currentPuyo.axis.y + dy;
+
+        return (
+          isValidMove(nextCenterX, nextCenterY) &&
+          isValidMove(nextAxisX, nextAxisY)
+        );
+      }
+
+      // 指定された座標が有効か（グリッド範囲内で空か）チェック
+      function isValidMove(x, y) {
+        return (
+          x >= 0 &&
+          x < COLS &&
+          y >= 0 &&
+          y < ROWS &&
+          (!grid[y] || grid[y][x] === 0)
+        );
+      }
+
+      // 4つ以上繋がったぷよを探して消す
+      function findAndClearMatches() {
+        const toClear = [];
+        const visited = Array.from({ length: ROWS }, () =>
+          Array(COLS).fill(false)
+        );
+        let totalCleared = 0;
+
+        for (let y = 0; y < ROWS; y++) {
+          for (let x = 0; x < COLS; x++) {
+            if (grid[y][x] !== 0 && !visited[y][x]) {
+              const color = grid[y][x];
+              const connected = [];
+              const queue = [{ x, y }];
+              visited[y][x] = true;
+
+              while (queue.length > 0) {
+                const { x: cx, y: cy } = queue.shift();
+                connected.push({ x: cx, y: cy });
+
+                const neighbors = [
+                  { x: cx, y: cy - 1 }, // 上
+                  { x: cx, y: cy + 1 }, // 下
+                  { x: cx - 1, y: cy }, // 左
+                  { x: cx + 1, y: cy }, // 右
+                ];
+
+                for (const n of neighbors) {
+                  if (
+                    n.x >= 0 &&
+                    n.x < COLS &&
+                    n.y >= 0 &&
+                    n.y < ROWS &&
+                    grid[n.y][n.x] === color &&
+                    !visited[n.y][n.x]
+                  ) {
+                    visited[n.y][n.x] = true;
+                    queue.push(n);
+                  }
+                }
+              }
+
+              if (connected.length >= 4) {
+                toClear.push(...connected);
+              }
+            }
+          }
+        }
+
+        if (toClear.length > 0) {
+          totalCleared = toClear.length;
+          toClear.forEach(({ x, y }) => {
+            grid[y][x] = 0;
+          });
+        }
+        return totalCleared;
+      }
+
+      // 消えたぷよの上に浮いているぷよを落とす
+      function applyGravity() {
+        for (let x = 0; x < COLS; x++) {
+          let emptyRow = ROWS - 1;
+          for (let y = ROWS - 1; y >= 0; y--) {
+            if (grid[y][x] !== 0) {
+              if (y !== emptyRow) {
+                grid[emptyRow][x] = grid[y][x];
+                grid[y][x] = 0;
+              }
+              emptyRow--;
+            }
+          }
+        }
+      }
+
+      // スコア計算
+      function calculateScore(clearedCount, chain) {
+        const chainBonus = [
+          0, 8, 16, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384,
+          416, 448, 480, 512,
+        ];
+        const bonus = chainBonus[Math.min(chain, chainBonus.length - 1)];
+        score += clearedCount * 10 * (bonus === 0 ? 1 : bonus);
+      }
+
+      // ゲームオーバー処理
+      function gameOver() {
+        isGameOver = true;
+        clearInterval(fallInterval);
+        gameOverEl.style.display = "flex";
+      }
+
+      // 描画処理
+      function draw() {
+        // 背景をクリア
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawGrid();
+        if (!isGameOver) {
+          currentPuyo.draw();
+        }
+      }
+
+      // グリッド上のぷよを描画
+      function drawGrid() {
+        for (let y = HIDDEN_ROWS; y < ROWS; y++) {
+          for (let x = 0; x < COLS; x++) {
+            if (grid[y][x] !== 0) {
+              ctx.fillStyle = PUYO_COLORS[grid[y][x]];
+              const puyo = new Puyo(ctx);
+              puyo.drawPuyo(x, y - HIDDEN_ROWS);
+            }
+          }
+        }
+      }
+
+      // 次のぷよを描画
+      function drawNextPuyo() {
+        nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
+        // 中心ぷよ
+        nextCtx.fillStyle = PUYO_COLORS[nextPuyo.color];
+        nextPuyo.drawPuyo(1.5, 1);
+        // 軸ぷよ
+        nextCtx.fillStyle = PUYO_COLORS[nextPuyo.subColor];
+        nextPuyo.drawPuyo(1.5, 2);
+      }
+
+      // スコア表示を更新
+      function updateScoreDisplay() {
+        scoreEl.textContent = score;
+        chainEl.textContent = `${chainCount} れんさ`;
+      }
+
+      // sleep関数
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      // キーボード操作
+      document.addEventListener("keydown", (e) => {
+        if (isGameOver || isCheckingChain) return;
+
+        if (e.key === "ArrowLeft") {
+          // 左
+          if (canMove(-1, 0)) currentPuyo.move(-1, 0);
+        } else if (e.key === "ArrowRight") {
+          // 右
+          if (canMove(1, 0)) currentPuyo.move(1, 0);
+        } else if (e.key === "ArrowDown") {
+          // 下
+          if (canMove(0, 1)) {
+            currentPuyo.move(0, 1);
+            score += 1; // 高速落下ボーナス
+            updateScoreDisplay();
+          } else {
+            gameLoop(); // 即座に次の処理へ
+          }
+        } else if (e.key === "z" || e.key === "Z") {
+          // 左回転
+          currentPuyo.rotate(-1);
+        } else if (e.key === "x" || e.key === "X") {
+          // 右回転
+          currentPuyo.rotate(1);
+        }
+        draw();
+      });
+
+      // ボタン操作
+      document
+        .getElementById("left-btn")
+        .addEventListener("click", () => handleMove(-1, 0));
+      document
+        .getElementById("right-btn")
+        .addEventListener("click", () => handleMove(1, 0));
+      document
+        .getElementById("down-btn")
+        .addEventListener("click", () => handleMove(0, 1, true));
+      document
+        .getElementById("rotate-left-btn")
+        .addEventListener("click", () => handleRotate(-1));
+      document
+        .getElementById("rotate-right-btn")
+        .addEventListener("click", () => handleRotate(1));
+
+      function handleMove(dx, dy, isDown = false) {
+        if (isGameOver || isCheckingChain) return;
+        if (canMove(dx, dy)) {
+          currentPuyo.move(dx, dy);
+          if (isDown) {
+            score += 1;
+            updateScoreDisplay();
+          }
+        } else if (isDown) {
+          gameLoop();
+        }
+        draw();
+      }
+
+      function handleRotate(direction) {
+        if (isGameOver || isCheckingChain) return;
+        currentPuyo.rotate(direction);
+        draw();
+      }
+
+      // ゲームスタートボタン
+      startButton.addEventListener("click", init);
+    </script>
+  </body>
+</html>
